@@ -2,15 +2,8 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<!-- 🍎 MODO APP -->
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#020617">
-
-<title>Sergio TV</title>
+<title>Sergio TV PRO</title>
 
 <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 
@@ -27,6 +20,10 @@ header{
     display:flex;
     gap:10px;
     padding:10px;
+    background:#020617;
+    position:sticky;
+    top:0;
+    z-index:10;
 }
 
 button{
@@ -35,6 +32,18 @@ button{
     padding:8px 12px;
     border-radius:6px;
     color:white;
+    cursor:pointer;
+}
+
+button:hover{ background:#22d3ee; }
+
+/* SEARCH */
+#search{
+    margin:10px;
+    padding:10px;
+    width:90%;
+    border-radius:8px;
+    border:none;
 }
 
 /* PLAYER */
@@ -43,34 +52,84 @@ video{
     height:45vh;
     object-fit:cover;
     background:black;
+    border-bottom:2px solid #22d3ee;
 }
 
 /* GRID */
 #grid{
     display:grid;
-    grid-template-columns:repeat(3,1fr);
-    gap:10px;
-    padding:10px;
+    grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
+    gap:15px;
+    padding:15px;
 }
 
 /* CARD */
 .card{
     background:#111827;
-    border-radius:10px;
+    border-radius:12px;
     overflow:hidden;
+    cursor:pointer;
+    transition:0.25s;
+    position:relative;
 }
 
+.card.active{
+    outline:2px solid #22d3ee;
+}
+
+.card:hover{
+    transform:scale(1.12);
+    z-index:5;
+    box-shadow:0 20px 50px rgba(34,211,238,0.6);
+}
+
+/* LOGO */
 .logo{
     width:100%;
-    height:80px;
+    height:100px;
     object-fit:contain;
     background:black;
 }
 
+/* NAME */
 .name{
-    font-size:11px;
-    padding:5px;
+    padding:8px;
+    font-size:12px;
     text-align:center;
+}
+
+/* LIVE */
+.live{
+    position:absolute;
+    top:5px;
+    left:5px;
+    background:red;
+    font-size:10px;
+    padding:2px 6px;
+    border-radius:4px;
+}
+
+/* FAVORITE */
+.star{
+    position:absolute;
+    top:5px;
+    right:5px;
+    font-size:16px;
+    cursor:pointer;
+}
+
+/* TOAST */
+#toast{
+    position:fixed;
+    bottom:20px;
+    left:50%;
+    transform:translateX(-50%);
+    background:#020617;
+    border:1px solid #22d3ee;
+    padding:10px 20px;
+    border-radius:10px;
+    opacity:0;
+    transition:0.3s;
 }
 </style>
 </head>
@@ -81,19 +140,40 @@ video{
 <button onclick="app.load('cl')">🇨🇱</button>
 <button onclick="app.load('ar')">🇦🇷</button>
 <button onclick="app.load('mx')">🇲🇽</button>
+<button onclick="app.load('us')">🇺🇸</button>
+<button onclick="app.load('es')">🇪🇸</button>
 </header>
 
-<video id="video" controls autoplay muted playsinline></video>
+<input id="search" placeholder="Buscar canal...">
+
+<video id="video" controls autoplay></video>
 
 <div id="grid"></div>
+
+<div id="toast"></div>
 
 <script>
 const app={
 
 channels:[],
+filtered:[],
+favorites:new Set(),
 hls:null,
+activeId:null,
+
+init(){
+    const fav=localStorage.getItem("fav");
+    if(fav) this.favorites=new Set(JSON.parse(fav));
+
+    const lastCountry=localStorage.getItem("country")||"cl";
+    this.load(lastCountry);
+
+    document.getElementById("search").oninput=()=>this.filter();
+},
 
 async load(country){
+    localStorage.setItem("country",country);
+
     const url=`https://iptv-org.github.io/iptv/countries/${country}.m3u`;
     const res=await fetch(url);
     const txt=await res.text();
@@ -102,16 +182,18 @@ async load(country){
 },
 
 parse(text){
+    this.channels=[];
+
     const lines=text.split("\n");
     let current={};
-
-    this.channels=[];
 
     lines.forEach((l,i)=>{
         l=l.trim();
 
         if(l.startsWith("#EXTINF")){
-            current.name=l.split(",")[1].trim();
+            current.name=l.split(",")[1]
+                .replace(/http.*|Chrome.*|group-title.*|Mobile.*|Safari.*/gi,"")
+                .trim();
 
             const logo=l.match(/tvg-logo="([^"]+)"/);
             current.logo=logo?logo[1]:null;
@@ -124,52 +206,131 @@ parse(text){
         }
     });
 
+    this.filtered=[...this.channels];
+    this.render();
+},
+
+filter(){
+    const q=document.getElementById("search").value.toLowerCase();
+
+    this.filtered=this.channels.filter(c=>
+        c.name.toLowerCase().includes(q)
+    );
+
+    this.filtered.sort((a,b)=>{
+        return this.favorites.has(b.id)-this.favorites.has(a.id);
+    });
+
     this.render();
 },
 
 render(){
     const grid=document.getElementById("grid");
 
-    grid.innerHTML=this.channels.map(c=>`
-        <div class="card" onclick="app.play('${c.id}')">
-            <img class="logo" src="${c.logo || ''}">
+    grid.innerHTML=this.filtered.map(c=>`
+        <div class="card ${this.activeId===c.id?'active':''}" onclick="app.play('${c.id}')">
+            
+            <div class="live">EN VIVO</div>
+
+            <div class="star" onclick="app.fav('${c.id}',event)">
+                ${this.favorites.has(c.id)?"⭐":"☆"}
+            </div>
+
+            <img class="logo" loading="lazy"
+            src="${c.logo || 'https://via.placeholder.com/150'}">
+
             <div class="name">${c.name}</div>
         </div>
     `).join("");
 },
 
+fav(id,e){
+    e.stopPropagation();
+
+    if(this.favorites.has(id)) this.favorites.delete(id);
+    else this.favorites.add(id);
+
+    localStorage.setItem("fav",JSON.stringify([...this.favorites]));
+    this.render();
+},
+
 play(id){
     const ch=this.channels.find(c=>c.id===id);
+    this.activeId=id;
+
+    localStorage.setItem("last",id);
+
+    this.render();
+
+    setTimeout(()=>{
+        document.querySelector('.card.active')?.scrollIntoView({
+            behavior:'smooth',
+            block:'center'
+        });
+    },200);
+
     this.start(ch.url);
 },
 
 start(url){
     const video=document.getElementById("video");
 
-    // 🍎 iPhone usa HLS nativo
-    if(video.canPlayType('application/vnd.apple.mpegurl')){
-        video.src=url;
+    if(this.hls) this.hls.destroy();
 
-    } else if(Hls.isSupported()){
-        if(this.hls) this.hls.destroy();
+    let retry=0;
 
+    if(Hls.isSupported() && url.includes("m3u8")){
         this.hls=new Hls();
+
         this.hls.loadSource(url);
         this.hls.attachMedia(video);
+
+        this.hls.on(Hls.Events.ERROR,(e,d)=>{
+            if(d.fatal){
+                if(retry<3){
+                    retry++;
+                    this.toast("Reintentando...");
+                    this.hls.startLoad();
+                } else {
+                    this.toast("Canal caído");
+                }
+            }
+        });
+
+    } else {
+        video.src=url;
     }
+
+    video.volume=localStorage.getItem("vol")||1;
+
+    video.onvolumechange=()=>{
+        localStorage.setItem("vol",video.volume);
+    };
+
+    video.addEventListener("dblclick",()=>{
+        if(video.requestFullscreen) video.requestFullscreen();
+    });
 
     video.play();
+},
 
-    // 🍎 fullscreen iPhone
-    if(video.webkitEnterFullscreen){
-        video.webkitEnterFullscreen();
-    }
+toast(msg){
+    const t=document.getElementById("toast");
+    t.innerText=msg;
+    t.style.opacity=1;
+
+    setTimeout(()=>t.style.opacity=0,2000);
 }
 
 };
 
 document.addEventListener("DOMContentLoaded",()=>{
-    app.load('cl');
+    app.init();
+
+    setTimeout(()=>{
+        const last=localStorage.getItem("last");
+        if(last) app.play(last);
+    },1000);
 });
 </script>
 
